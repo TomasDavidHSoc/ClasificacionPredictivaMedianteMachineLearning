@@ -1,0 +1,726 @@
+---
+title: "Clasificación Predictiva mediante Machine Learning"
+author: "Tomas David Hernandez Soc"
+date: "2024-11-24"
+output: 
+  bookdown::pdf_document2:  
+    number_sections: false
+    toc: false
+    highlight: tango
+geometry: margin=1.5cm
+urlcolor: blue
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r configuracion, include=F}
+#Limpiamos entorno
+rm(list=ls(all.names = TRUE))
+gc()
+# Agregamos configuraciones para los chunks
+# y figuras
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.align = "center",
+#Agregamos configuraciones para evitar mensajes de advertencias y de errores en el archivo
+	message = FALSE,
+	warning = FALSE,
+	error = F
+)
+```
+
+```{r Carga librerias, include=FALSE}
+# --- Librerías de Datos y Manipulación ---
+library(dplyr)      # Manipulación y transformación de datos (pipes)
+library(tidyverse)  # Conjunto de librerías para ciencia de datos
+library(readr)      # Lectura eficiente de archivos
+
+# --- Librerías de Modelado y Machine Learning ---
+library(caret)      # Framework para entrenamiento y validación de modelos
+library(glmnet)     # Regresión regularizada (Lasso, Ridge, Elastic Net)
+library(randomForest)# Algoritmo de Random Forest
+library(e1071)      # Implementación del clasificador Naive Bayes
+library(class)      # Clasificación mediante K-vecinos más cercanos (K-NN)
+library(MASS)       # Métodos estadísticos (LDA, QDA, etc.)
+library(mlbench)    # Repositorio de bases de datos para Machine Learning
+
+# --- Librerías de Estadística y Evaluación ---
+library(metrica)    # Métricas de desempeño para clasificación y regresión
+library(psych)      # Análisis factorial y psicometría
+library(FactoMineR) # Análisis multivariado (PCA, CA, MFA)
+library(mice)       # Imputación multivariada por ecuaciones encadenadas (MICE)
+
+# --- Visualización ---
+library(ggplot2)    # Gramática de gráficos para visualización
+library(cowplot)    # Composición de paneles y figuras múltiples
+library(gridExtra)  # Organización de gráficos en rejillas (grid)
+library(factoextra) # Visualización de resultados de PCA y Clustering
+library(kableExtra) # Formateo profesional de tablas en RMarkdown
+
+# --- Utilidades ---
+library(Matrix)     # Manejo de matrices dispersas (necesaria para glmnet)
+```
+
+El diagnóstico temprano de enfermedades crónicas representa uno de los retos más significativos en la medicina preventiva actual. El presente análisis utiliza información recopilada por el Instituto Nacional de Diabetes y Enfermedades Digestivas y Renales de los EE.UU., enfocada en una población de mujeres de al menos 21 años de edad con ascendencia indígena Pima. Nuestro objetivo es utilizar diferentes indicadores clínicos para predecir si una paciente tiene o no diabetes.
+
+Durante la inspección inicial de la información, detectamos un problema importante en la calidad de los datos originales: varios registros médicos mostraban imposibilidades físicas, como mediciones de presión arterial o índice de masa corporal iguales a cero. En un escenario tradicional, la solución más rápida sería eliminar por completo a las pacientes que tuvieran algún valor erróneo o faltante. Sin embargo, descartar estas observaciones significaría perder casi la mitad de los registros, lo que sesgaría fuertemente nuestro análisis y dejaría fuera perfiles de pacientes reales.
+
+Para solucionar esto de forma rigurosa, decidimos tratar esos valores en cero como "datos faltantes" y aplicar una técnica avanzada de recuperación de información conocida como Imputación Multivariada por Ecuaciones Encadenadas (MICE). Para entender cómo funciona MICE, imaginemos a un médico analizando un expediente incompleto. Si a una paciente le falta el registro exacto de su presión arterial, en lugar de adivinar o poner un promedio general que distorsione la realidad, el método MICE analiza el resto de sus características, como su edad, su nivel de glucosa y su masa corporal. A partir de ahí, busca patrones matemáticos comparándola con cientos de pacientes similares en la base de datos para deducir, con alta precisión, cuál debería ser ese valor clínico faltante.  De esta manera, logramos rescatar el 100% de las observaciones originales, garantizando que el modelo predictivo final aprenda de una base de datos completa y confiable.
+
+El sistema evaluará las siguientes nueve variables para realizar su diagnóstico:
+
+* pregnant: Número de embarazos que ha tenido la paciente.
+
+* glucose: Concentración de glucosa en plasma (prueba de tolerancia a la glucosa).
+
+* pressure: Presión arterial diastólica (mm Hg).
+
+* triceps: Grosor del pliegue cutáneo del tríceps (mm).
+
+* insulin: Insulina sérica de 2 horas (mu U/ml).
+
+* mass: Índice de masa corporal.
+
+* pedigree: Función que evalúa el historial genético familiar de diabetes.
+
+* age: Edad de la paciente en años.
+
+* diabetes: Variable a predecir, indicando el resultado real de la prueba (negativo o positivo).
+
+Con la información debidamente depurada, el primer paso de nuestra metodología consiste en realizar un análisis descriptivo. A través de una visualización detallada, observaremos cómo se distribuye cada variable predictora para identificar, a simple vista, qué indicadores clínicos muestran las diferencias más marcadas entre los grupos de pacientes sanas y diagnosticadas.
+
+```{r preparacion datos, include=FALSE}
+# Carga del conjunto de datos original
+data(PimaIndiansDiabetes2)
+datos0 <- PimaIndiansDiabetes2
+
+# Imputación de datos faltantes mediante MICE
+# Se emplea Predictive Mean Matching (pmm) con 5 conjuntos imputados para evitar la pérdida de información
+imputacion <- mice(datos0, m = 5, method = "pmm", seed = 123, printFlag = FALSE)
+
+# Extracción del conjunto de datos completo (se selecciona la primera imputación)
+datos0 <- complete(imputacion, 1)
+
+# Renombramiento de variables para estandarización en el análisis posterior
+nombres_var <- c("Embarazo", "Glucosa", "Presión", "Triceps", "Insulina", "IMC", "Antecedentes", "Edad", "diabetes")
+colnames(datos0) <- nombres_var
+
+# Resumen estadístico preliminar segmentado por variable objetivo
+summary(datos0[datos0$diabetes == "pos", ])
+summary(datos0[datos0$diabetes == "neg", ])
+```
+
+```{r analisisexploratorio, echo=FALSE, fig.width=7, fig.height=7, fig.align="center", fig.pos="H", fig.cap="Distribución de variables clínicas segmentadas por diagnóstico de diabetes"}
+# Generación de la lista de variables predictoras excluyendo la variable respuesta
+predictors <- colnames(datos0)[colnames(datos0) != "diabetes"]
+
+# Creación iterativa de diagramas de caja (boxplots) para cada predictor
+boxplots <- lapply(predictors, function(var) {
+  # Mapeo dinámico de la variable en el eje Y mediante el pronombre .data
+  ggplot(datos0, aes(x = diabetes, y = .data[[var]], fill = diabetes)) +
+    geom_boxplot(alpha = 0.7) +
+    labs(x = "Diabetes", y = var, title = var) +
+    theme_minimal() +
+    scale_fill_manual(values = c("neg" = "lightpink", "pos" = "lightblue")) +
+    theme(legend.position = "none")
+})
+
+# Organización y renderizado de los gráficos en una cuadrícula (2 filas x 4 columnas)
+grid.arrange(grobs = boxplots, ncol = 4)
+```
+Una vez reconstruida la base de datos completa, el primer paso de nuestra metodología consistió en realizar un análisis visual de las distribuciones clínicas. Generamos diagramas de caja para comparar cómo se comportan los ocho indicadores médicos entre los pacientes con resultados negativos (sanos) y positivos (diabéticos).
+
+Este análisis exploratorio arrojó hallazgos fundamentales para el diagnóstico. Visualmente, confirmamos que la concentración de glucosa (glucose) es el indicador individual con mayor poder discriminatorio pues las pacientes con diagnóstico positivo muestran, en promedio, niveles considerablemente más altos y una separación clara respecto al grupo negativo. De igual forma, el índice de masa corporal (mass), la insulina (insulin) y la edad (age) muestran tendencias al alza en pacientes diagnosticadas, confirmando su relevancia como factores de riesgo.
+
+Por otro lado, variables como la presión arterial (pressure) o el grosor del pliegue cutáneo (triceps) muestran una fuerte superposición entre ambos grupos. Esto nos indica a nivel directivo que estas métricas, si se evalúan de forma aislada en un consultorio, no son suficientes para emitir un diagnóstico concluyente. Sin embargo, en el siguiente paso de nuestro análisis, utilizaremos algoritmos de aprendizaje automático para combinar todas estas variables simultáneamente, detectando patrones complejos que el ojo humano o una sola gráfica no pueden captar por sí solos.
+
+```{r datos2, include=FALSE}
+# Carga del conjunto de datos original para la fase de modelado predictivo
+data("PimaIndiansDiabetes2")
+
+# Imputación de valores faltantes para el entorno de modelado
+# Se emplea la misma semilla (seed = 123) para garantizar la consistencia 
+# con la imputación realizada durante la fase de análisis exploratorio
+imputacion_modelos <- mice(PimaIndiansDiabetes2, m = 5, method = "pmm", seed = 123, printFlag = FALSE)
+
+# Extracción del conjunto de datos completo manteniendo la nomenclatura original (inglés)
+PimaIndiansDiabetes2 <- complete(imputacion_modelos, 1)
+```
+
+```{r grafcp2, echo=FALSE, fig.width=6, fig.height=9, fig.align="center", fig.pos="H", fig.cap="Diagramas de dispersión diferenciando los dos grupos a clasificar"}
+# Cálculo de los componentes principales (PCA) sobre las variables predictoras (columnas 1 a 8)
+# Se estandarizan las variables (scale = T) para igualar las magnitudes
+cp2 <- prcomp(PimaIndiansDiabetes2[, 1:8], scale = TRUE)
+
+# Construcción del dataframe integrando los componentes principales y la variable respuesta
+cp_data <- data.frame(cp2$x)
+cp_data$grupo <- PimaIndiansDiabetes2$diabetes
+
+# Generación de gráficos de dispersión para analizar la separabilidad de clases
+# Proyección sobre PC1 y PC2
+x1 <- ggplot(data = cp_data, aes(x = PC1, y = PC2, color = grupo)) +
+  geom_point(alpha = 0.7) +
+  ggtitle("Diagrama de dispersión", subtitle = "Primer y segundo \ncomponente principal") +
+  theme_minimal()
+
+# Proyección sobre PC1 y PC3
+x2 <- ggplot(data = cp_data, aes(x = PC1, y = PC3, color = grupo)) +
+  geom_point(alpha = 0.7) +
+  ggtitle("Diagrama de dispersión", subtitle = "Primer y tercer \ncomponente principal") +
+  theme_minimal()
+
+# Proyección sobre PC3 y PC2
+x3 <- ggplot(data = cp_data, aes(x = PC3, y = PC2, color = grupo)) +
+  geom_point(alpha = 0.7) +
+  ggtitle("Diagrama de dispersión", subtitle = "Segundo y tercer \ncomponente principal") +
+  theme_minimal()
+
+# Visualización conjunta en cuadrícula de los componentes seleccionados
+plot_grid(x1, x2, x3, ncol = 1)
+```
+
+Manejar ocho variables médicas simultáneamente puede introducir redundancia en los sistemas automatizados, ya que algunos indicadores pueden estar midiendo fenómenos de salud similares. Para optimizar esto, aplicamos un Análisis de Componentes Principales (PCA). Esta técnica matemática nos permite comprimir la información de las ocho variables originales en nuevos "componentes" que resumen la mayor cantidad de información posible.
+
+Para identificar qué componentes capturan la verdadera señal clínica, generamos un panel con tres diagramas de dispersión cruzando las interacciones de los primeros tres componentes (PC1, PC2 y PC3). Al observar las distribuciones, el hallazgo es contundente: en los dos primeros diagramas (donde participa el PC1), existe una separación natural y visible entre las pacientes sanas y las diagnosticadas. El Primer Componente Principal logra agrupar a la mayoría de los casos positivos hacia un extremo del espectro, marcando una clara frontera de riesgo.
+
+En contraste, al observar el tercer diagrama en la parte inferior, que cruza únicamente el Segundo y Tercer Componente (PC3 vs PC2), la separación desaparece por completo. La gráfica muestra una nube de datos donde ambos grupos se superponen de manera caótica, lo que indica que, por sí solos, estos componentes secundarios no aportan valor discriminatorio.
+
+Esto confirma visual y empíricamente que el Primer Componente Principal (PC1) contiene la señal predictiva más fuerte. Incorporar esta variable sintetizada en la siguiente fase de modelado será clave para aumentar la precisión del diagnóstico final sin sobrecargar los algoritmos con ruido innecesario.
+
+```{r particion2, include=FALSE}
+# Fijamos una semilla para garantizar la reproducibilidad de los resultados en todos los modelos
+set.seed(123)
+
+# Generación de particiones estratificadas (Monte Carlo Cross-Validation)
+# Se definen 50 iteraciones para evaluar la robustez predictiva.
+B <- 50
+
+# createDataPartition asegura que la proporción original de diagnósticos (pos/neg) 
+# se mantenga idéntica tanto en el 80% de entrenamiento como en el 20% de prueba.
+particion <- createDataPartition(PimaIndiansDiabetes2$diabetes, p = 0.80, list = FALSE, times = B)
+```
+
+
+```{r mod1logit, include=FALSE}
+# Exploración inicial: Modelo Lineal Generalizado (Regresión Logística) 
+# Se incluyen los efectos principales y sus interacciones de segundo orden (.^2)
+mod1 <- glm(diabetes ~ .^2, family = binomial(), data = PimaIndiansDiabetes2)
+# Al ponerle `family = binomial()`, se hace una Regresión Logística. La parte clave aquí es el `.^2`. El punto `.` significa "usa todas las variables", y el `^2` significa "además, combínalas todas en pares". O sea, se esta evaluando cosas como `Glucosa * Edad`, `Insulina * Presión`, etc.
+
+# Predicción de probabilidades sobre el conjunto total (fase exploratoria)
+logit1 <- predict(mod1, newdata = PimaIndiansDiabetes2, type = "response")
+
+# Definición de la regla de decisión: umbral del 0.5 para la clasificación binaria. Si la probabilidad es 50% o más, clasifica al paciente como positivo
+pred1 <- ifelse(logit1 >= 0.5, levels(PimaIndiansDiabetes2$diabetes)[2], levels(PimaIndiansDiabetes2$diabetes)[1])
+
+# Función para evaluar el modelo mediante validación cruzada repetida
+mod1logit <- function(x, IndTrain, Data){
+  # Segmentación de índices para entrenamiento y prueba en la iteración x
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Entrenamiento del modelo logístico con interacciones sobre el set de entrenamiento
+  modtrain <- glm(diabetes ~ .^2, family = binomial(), data = PimaIndiansDiabetes2[train, ])
+  
+  # Predicción probabilística sobre el set de prueba (datos no vistos)
+  predtest <- predict(modtrain, newdata = PimaIndiansDiabetes2[test, ], type = "response")
+  
+  # Aplicación de la regla de decisión (corte en 0.5)
+  predregla <- ifelse(predtest >= 0.5, levels(PimaIndiansDiabetes2$diabetes)[2], levels(PimaIndiansDiabetes2$diabetes)[1])
+  
+  # Cálculo de métricas de desempeño (Exactitud, Sensibilidad, Especificidad)
+  tasas_c <- metrics_summary(obs = PimaIndiansDiabetes2[test, "diabetes"], 
+                             pred = predregla, 
+                             metrics_list = c("accuracy", "recall", "specificity"), 
+                             type = "classification")
+  
+  # Se extraen y retornan únicamente los valores numéricos de las métricas
+  return(tasas_c[, 2])
+}
+
+# Ejecución de la función sobre las 50 particiones mediante sapply
+TCC.B.mod1 <- sapply(1:B, mod1logit, IndTrain = particion, Data = PimaIndiansDiabetes2)
+
+# Cálculo del desempeño promedio del modelo a través de todas las iteraciones
+(TCC.mod1 <- rowMeans(TCC.B.mod1))
+```
+
+```{r mlogit-ep, include=FALSE}
+# Exploración de un segundo modelo logístico considerando únicamente los efectos principales
+mod2 <- glm(diabetes ~ ., family = binomial(), data = PimaIndiansDiabetes2)
+
+# Predicción probabilística inicial sobre el conjunto completo
+logit1 <- predict(mod2, newdata = PimaIndiansDiabetes2, type = "response")
+
+# Definición de la regla de clasificación basada en un umbral probabilístico de 0.5
+pred1 <- ifelse(logit1 >= 0.5, levels(PimaIndiansDiabetes2$diabetes)[2], levels(PimaIndiansDiabetes2$diabetes)[1])
+
+# Función de validación cruzada para evaluar el modelo de efectos principales
+mod2logit <- function(x, IndTrain, Data){
+  # Asignación de conjuntos de entrenamiento y prueba por iteración
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Ajuste del modelo logístico sin interacciones
+  modtrain <- glm(diabetes ~ ., family = binomial(), data = PimaIndiansDiabetes2[train, ])
+  
+  # Predicción de probabilidades para el conjunto de prueba
+  predtest <- predict(modtrain, newdata = PimaIndiansDiabetes2[test, ], type = "response")
+  
+  # Aplicación de la regla de decisión (corte en 0.5)
+  predregla <- ifelse(predtest >= 0.5, levels(PimaIndiansDiabetes2$diabetes)[2], levels(PimaIndiansDiabetes2$diabetes)[1])
+  
+  # Evaluación del desempeño predictivo del modelo
+  tasas_c <- metrics_summary(obs = PimaIndiansDiabetes2[test, "diabetes"], 
+                             pred = predregla, 
+                             metrics_list = c("accuracy", "recall", "specificity"), 
+                             type = "classification")
+  
+  # Extracción de los resultados numéricos
+  return(tasas_c[, 2])
+}
+
+# Ejecución iterativa de la función sobre las 50 particiones
+TCC.B.mod2 <- sapply(1:B, mod2logit, IndTrain = particion, Data = PimaIndiansDiabetes2)
+
+# Promedio del desempeño en las 50 iteraciones para obtener métricas estables
+(TCC.mod2 <- rowMeans(TCC.B.mod2))
+```
+
+```{r mod4-sel-var, include=FALSE}
+# Selección de variables mediante regularización Lasso (L1) 
+# Se evalúan efectos principales, interacciones de segundo orden y términos cuadráticos
+
+# Identificación automática de variables continuas
+continuas <- names(PimaIndiansDiabetes2 %>% select_if(~is.numeric(.x)))
+
+# Exclusión de la variable respuesta para el diseño de predictores
+xnames <- continuas[!continuas %in% c("diabetes")]
+
+# Construcción dinámica de la fórmula: interacciones (.^2) + términos cuadráticos (I(x^2))
+formula <- as.formula(paste("diabetes ~ .^2", '+', paste(paste('I(', xnames, '^2)', collapse = ' + '))))
+
+# Generación de la matriz de diseño (requerida por glmnet) y exclusión del intercepto ([, -1])
+Xmod3 <- model.matrix(formula, data = PimaIndiansDiabetes2)[, -1]
+
+# Vector de la variable respuesta
+Ymod3 <- PimaIndiansDiabetes2[, 'diabetes']
+
+# Optimización del hiperparámetro lambda mediante validación cruzada (5-folds)
+set.seed(123)
+mod3.lasso.tun <- cv.glmnet(Xmod3, Ymod3, nfolds = 5, type.measure = "class", gamma = 0, relax = FALSE, family = binomial(link = "logit"), nlambda = 100)
+
+# Exploración gráfica y extracción del lambda óptimo (no se renderizan en PDF por include=FALSE)
+plot(mod3.lasso.tun)
+print.cv.glmnet(mod3.lasso.tun)
+mod3.lasso.tun$lambda.min
+coef(mod3.lasso.tun, s = "lambda.min")
+
+# --- Medición del poder predictivo ---
+
+# Función de validación cruzada repetida para el modelo Lasso
+mod3RHM <- function(x, IndTrain, Data, formulaM){
+  # Asignación de índices para entrenamiento y prueba
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Matriz de diseño global
+  Xmod3total <- model.matrix(formulaM, data = Data)[, -1]
+  
+  # Segmentación de la matriz y vector respuesta para entrenamiento
+  Xmod3t <- Xmod3total[train, ]
+  Yt <- Data[train, "diabetes"]
+  
+  # Sintonización de lambda exclusivo para los datos de entrenamiento
+  mod3t.lasso.tun <- cv.glmnet(Xmod3t, Yt, nfolds = 5, type.measure = "class", gamma = 0, relax = FALSE, family = "binomial", nlambda = 100)
+  
+  # Predicción probabilística sobre la matriz de prueba usando el lambda óptimo
+  predtest <- predict(mod3t.lasso.tun, newx = Xmod3total[test, ], type = "response", s = "lambda.min")
+  
+  # Regla de clasificación (umbral 0.5)
+  predregla <- ifelse(predtest >= 0.5, levels(Data$diabetes)[2], levels(Data$diabetes)[1])
+  
+  # Cálculo de métricas de desempeño
+  tasas_c <- metrics_summary(obs = Data[test, "diabetes"], pred = predregla, metrics_list = c("accuracy", "recall", "specificity"), type = 'classification')
+  
+  return(tasas_c[, 2])
+}
+
+# Ejecución iterativa sobre las 50 particiones
+set.seed(123)
+TCC.B.mod3 <- sapply(1:B, mod3RHM, IndTrain = particion, Data = PimaIndiansDiabetes2, formulaM = formula)
+
+# Promedio de métricas de evaluación
+(TCC.mod3 <- rowMeans(TCC.B.mod3))
+```
+
+```{r modelo-7, include=FALSE}
+# Exploración de un modelo lineal generalizado alternativo
+# Se utiliza selección de variables Lasso con distribución binomial y función de enlace logarítmica (log)
+
+# Definición de la fórmula: interacciones de segundo orden completas
+formula <- as.formula(paste("diabetes ~ .^2"))
+
+# Construcción de la matriz de diseño excluyendo el intercepto
+Xmod4 <- model.matrix(formula, data = PimaIndiansDiabetes2)[, -1]
+
+# Definición del vector de la variable objetivo
+Ymod4 <- PimaIndiansDiabetes2[, 'diabetes']
+
+# Sintonización del hiperparámetro lambda mediante validación cruzada (5-folds)
+# Se emplea el enlace 'log' como alternativa al 'logit' estándar
+set.seed(1)
+mod4.lasso.tun <- cv.glmnet(Xmod4, Ymod4, nfolds = 5, type.measure = "class", gamma = 0, relax = FALSE, family = binomial(link = "log"), nlambda = 100)
+
+# Exploración gráfica y extracción de coeficientes para el lambda que minimiza el error
+plot(mod4.lasso.tun)
+print.cv.glmnet(mod4.lasso.tun)
+mod4.lasso.tun$lambda.min
+coef(mod4.lasso.tun, s = "lambda.min")
+
+# --- Medición del poder predictivo ---
+
+# Función de validación cruzada para el modelo Lasso con enlace logarítmico
+mod4RHM <- function(x, IndTrain, Data, formulaM){
+  # Segmentación de conjuntos de entrenamiento y prueba
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Matriz de diseño global
+  Xmod4total <- model.matrix(formulaM, data = Data)[, -1]
+  
+  # Aislamiento de datos de entrenamiento
+  Xmod4t <- Xmod4total[train, ]
+  Yt <- Data[train, "diabetes"]
+  
+  # Sintonización de lambda exclusiva para entrenamiento usando enlace logarítmico
+  mod4t.lasso.tun <- cv.glmnet(Xmod4t, Yt, nfolds = 5, type.measure = "class", gamma = 0, relax = FALSE, family = binomial(link = "log"), nlambda = 100)
+  
+  # Predicción de probabilidades en el conjunto de prueba
+  predtest <- predict(mod4t.lasso.tun, newx = Xmod4total[test, ], type = "response", s = "lambda.min")
+  
+  # Regla de clasificación estándar (umbral 0.5)
+  predregla <- ifelse(predtest >= 0.5, levels(Data$diabetes)[2], levels(Data$diabetes)[1])
+  
+  # Evaluación de métricas de desempeño
+  tasas_c <- metrics_summary(obs = Data[test, "diabetes"], pred = predregla, metrics_list = c("accuracy", "recall", "specificity"), type = 'classification')
+  
+  return(tasas_c[, 2])
+}
+
+# Ejecución de la validación cruzada repetida (50 particiones)
+set.seed(12)
+TCC.B.mod4 <- sapply(1:B, mod4RHM, IndTrain = particion, Data = PimaIndiansDiabetes2, formulaM = formula)
+
+# Cálculo del desempeño promedio del modelo 4
+(TCC.mod4 <- rowMeans(TCC.B.mod4))
+```
+
+```{r naive-bin, include=FALSE}
+
+# Exploración inicial: Ajuste del modelo Naive Bayes con todas las variables
+# (Nota: se conserva el nombre de variable modlogit4 por consistencia en el entorno)
+modlogit4 <- naiveBayes(diabetes ~ ., data = PimaIndiansDiabetes2)
+
+# Extracción de las probabilidades posteriores (clase positiva) sobre el conjunto total
+modn <- predict(modlogit4, newdata = PimaIndiansDiabetes2, type = "raw")[, 2]
+
+# Obtención de las clases asignadas utilizando el umbral de máxima probabilidad
+clasesnaive <- predict(modlogit4, newdata = PimaIndiansDiabetes2)
+
+# --- Medición robusta del poder predictivo ---
+
+# Función de validación cruzada para el modelo Naive Bayes
+modnRHM <- function(x, IndTrain, Data){
+  # Segmentación de índices para los conjuntos de entrenamiento y prueba
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Entrenamiento del modelo Naive Bayes utilizando exclusivamente datos de entrenamiento
+  modtrain <- naiveBayes(diabetes ~ ., data = Data[train, ])
+  
+  # Predicción de las clases directamente sobre el conjunto de prueba
+  predtest <- predict(modtrain, newdata = Data[test, ])
+  
+  # Evaluación de métricas de desempeño predictivo
+  tasas <- metrics_summary(obs = Data[test, "diabetes"], 
+                           pred = predtest, 
+                           metrics_list = c("accuracy", "recall", "specificity"), 
+                           type = "classification")
+  
+  # Retorno de los valores numéricos de las métricas
+  return(tasas[, 2])
+}
+
+# Ejecución de la validación cruzada repetida (50 particiones estratificadas)
+TCC.B.modn <- sapply(1:B, modnRHM, IndTrain = particion, Data = PimaIndiansDiabetes2) 
+
+# Cálculo del desempeño promedio del modelo Naive Bayes
+TCC.modn <- rowMeans(TCC.B.modn)
+```
+
+```{r knn-model, include=FALSE}
+# --- Exploración inicial del modelo K-NN ---
+
+# Construcción de la matriz predictora numérica (K-NN no acepta variables categóricas o dataframes)
+Xmodk <- model.matrix(diabetes ~ ., data = PimaIndiansDiabetes2)[, -1]
+
+# Extracción de la variable objetivo
+Ymodk <- PimaIndiansDiabetes2[, "diabetes"]
+
+# Optimización (tuneo) del hiperparámetro K (número de vecinos) mediante validación cruzada interna
+set.seed(123)
+knn.cross <- tune.knn(x = Xmodk, y = Ymodk, k = 1:30, tunecontrol = tune.control(sampling = "cross", cross = 5))
+
+# Revisión del proceso de tuneo y extracción del mejor valor de K encontrado
+summary(knn.cross)
+knn.cross$best.parameters[[1]]
+
+# Clasificación inicial sobre toda la base utilizando el K óptimo
+modk <- knn(train = Xmodk, test = Xmodk, cl = Ymodk, k = knn.cross$best.parameters[[1]], use.all = TRUE)
+
+
+# --- Medición robusta del poder predictivo ---
+
+# Función de validación cruzada para el modelo K-NN
+modkRHM <- function(x, IndTrain, Data){
+  # Segmentación de conjuntos de entrenamiento y prueba
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Construcción de la matriz global excluyendo el intercepto
+  Xmodktotal <- model.matrix(diabetes ~ ., data = Data)[, -1]
+  
+  # Aislamiento de las matrices de entrenamiento y prueba
+  Xmodkt <- Xmodktotal[train, ]
+  Xmodktest <- Xmodktotal[test, ]
+  
+  # Vector de respuestas solo para el entrenamiento
+  Ymodk <- Data[train, "diabetes"]
+  
+  # Tuneo interno de K utilizando exclusivamente los datos de entrenamiento para evitar fuga de información
+  set.seed(123)
+  knn.crosst <- tune.knn(x = Xmodkt, y = Ymodk, k = 1:30, tunecontrol = tune.control(sampling = "cross", cross = 5))
+  
+  # Predicción sobre los datos de prueba utilizando el K óptimo validado en este ciclo
+  predk <- knn(train = Xmodkt, test = Xmodktest, cl = Ymodk, k = knn.crosst$best.parameters[[1]], use.all = TRUE)
+  
+  # Evaluación de métricas de desempeño
+  tasas <- metrics_summary(obs = Data[test, "diabetes"], pred = predk, metrics_list = c("accuracy", "recall", "specificity"), type = 'classification')
+  
+  return(tasas[, 2])
+}
+
+# Ejecución de la validación cruzada repetida (50 particiones estratificadas)
+set.seed(123)
+TCC.B.modk <- sapply(1:B, modkRHM, IndTrain = particion, Data = PimaIndiansDiabetes2)
+
+# Cálculo del desempeño promedio del modelo K-NN
+TCC.modk <- rowMeans(TCC.B.modk)
+```
+
+```{r modelo-lda, include=FALSE}
+# Exploración inicial: Ajuste del modelo LDA con todas las variables predictoras
+mod5 <- lda(diabetes ~ ., data = PimaIndiansDiabetes2)
+
+# Predicción sobre el conjunto de datos completo (medidas aparentes)
+mod5p <- predict(mod5, PimaIndiansDiabetes2)
+
+# Extracción de probabilidades y clases asignadas
+logit5 <- mod5p$posterior[, 2] # Probabilidad de pertenecer a la clase positiva
+res5 <- mod5p$class            # Asignación directa a la clase de máxima probabilidad
+
+# Verificación de consistencia en el umbral de decisión por defecto (0.5)
+res5b <- ifelse(logit5 >= 0.5, levels(PimaIndiansDiabetes2$diabetes)[2], levels(PimaIndiansDiabetes2$diabetes)[1])
+sum(res5 != res5b) # Si es 0, confirma que el modelo usa exactamente el corte del 50%
+
+# Cálculo del error aparente (sobre-entrenamiento) para referencia inicial
+metrics_summary(obs = PimaIndiansDiabetes2$diabetes, pred = res5, metrics_list = c("accuracy", "recall", "specificity"), type = 'classification')
+
+# --- Medición robusta del poder predictivo ---
+
+# Función de validación cruzada para evaluar el modelo LDA
+mod5RHM <- function(x, IndTrain, Dat){
+  # Asignación de conjuntos de entrenamiento y prueba
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Entrenamiento del modelo LDA usando exclusivamente los datos de entrenamiento
+  mod5t <- lda(diabetes ~ ., data = Dat[train, ])
+  
+  # Predicción de clases sobre los datos de prueba
+  mod5pt <- predict(mod5t, newdata = Dat[test, ])
+  predb <- mod5pt$class
+  
+  # Evaluación del desempeño predictivo con datos no vistos
+  resPod <- metrics_summary(obs = Dat[test, "diabetes"], pred = predb, metrics_list = c("accuracy", "recall", "specificity"), type = 'classification')
+  
+  return(resPod[, 2])
+}
+
+# Ejecución iterativa utilizando la partición estratificada global (garantiza comparabilidad)
+# Se utiliza la variable 'particion' original para asegurar el mismo set de pruebas
+TCC.B.mod5 <- sapply(1:B, mod5RHM, IndTrain = particion, Dat = PimaIndiansDiabetes2)
+
+# Promedio de las métricas de evaluación
+(TCC.RHM.mod5 <- rowMeans(TCC.B.mod5))
+```
+
+```{r qda-modelo-9, include=FALSE}
+# Exploración inicial: Ajuste del modelo de Análisis Discriminante Cuadrático (QDA)
+mod6QDA <- qda(diabetes ~ ., data = PimaIndiansDiabetes2)
+
+# Predicción sobre el conjunto de datos completo (medidas aparentes)
+mod6QDAp <- predict(mod6QDA, PimaIndiansDiabetes2)
+
+# Extracción de probabilidades y clases asignadas
+logit6 <- mod6QDAp$posterior[, 2]
+res6 <- mod6QDAp$class  # Asignación con punto de corte por defecto de 0.5
+
+# Verificación de consistencia en el umbral de decisión
+res6b <- ifelse(logit6 >= 0.5, levels(PimaIndiansDiabetes2$diabetes)[2], levels(PimaIndiansDiabetes2$diabetes)[1])
+sum(res6 != res6b) # Si es 0, el modelo corta exactamente en el 50%
+
+# Cálculo del error aparente (sobre-entrenamiento) para referencia inicial
+metrics_summary(obs = PimaIndiansDiabetes2$diabetes, pred = res6, metrics_list = c("accuracy", "recall", "specificity"), type = 'classification')
+
+# --- Medición robusta del poder predictivo ---
+
+# Función de validación cruzada para evaluar el modelo QDA
+mod6QDARHM <- function(x, IndTrain, Dat){
+  # Asignación de conjuntos de entrenamiento y prueba
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Entrenamiento del modelo QDA usando exclusivamente datos de entrenamiento
+  mod6QDAt <- qda(diabetes ~ ., data = Dat[train, ])
+  
+  # Predicción de clases sobre los datos de prueba
+  mod6QDApt <- predict(mod6QDAt, newdata = Dat[test, ])
+  predb <- mod6QDApt$class
+  
+  # Evaluación del desempeño predictivo con datos no vistos
+  resPod <- metrics_summary(obs = Dat[test, "diabetes"], pred = predb, metrics_list = c("accuracy", "recall", "specificity"), type = 'classification')
+  
+  return(resPod[, 2])
+}
+
+# Ejecución iterativa utilizando la partición estratificada global ('particion' con minúscula)
+TCC.B.mod6QDA <- sapply(1:B, mod6QDARHM, IndTrain = particion, Dat = PimaIndiansDiabetes2)
+
+# Promedio de las métricas de evaluación
+(TCC.RHM.mod6QDA <- rowMeans(TCC.B.mod6QDA))
+```
+
+```{r random-forest, include=FALSE}
+# Exploración inicial: Modelo de Random Forest
+# Se optimiza el hiperparámetro mtry (número de variables a considerar en cada división)
+
+# Definimos la malla de búsqueda para mtry (de 1 a 8 variables posibles)
+mallamtry <- seq(1, 8, 1)
+
+# Optimización de mtry mediante validación cruzada interna (5-folds)
+set.seed(123)
+tunRF1 <- tune.randomForest(diabetes ~ ., data = PimaIndiansDiabetes2, importance = FALSE, mtry = mallamtry, ntree = 200, nodesize = 1, tunecontrol = tune.control(sampling = "cross", cross = 5))
+
+# Ajuste del algoritmo Random Forest con los hiperparámetros óptimos
+RF1 <- randomForest(diabetes ~ ., data = PimaIndiansDiabetes2, mtry = tunRF1$best.parameters$mtry, importance = FALSE, ntree = 200, nodesize = 1)
+
+# Predicción del modelo sobre la base completa (error aparente)
+predRFt <- predict(RF1, newdata = PimaIndiansDiabetes2, type = "class")
+
+# --- Medición robusta del poder predictivo ---
+
+# Función de validación cruzada para evaluar el modelo Random Forest
+RFMPP <- function(x, IndTrain, Data){
+  # Segmentación de índices para entrenamiento y prueba
+  train <- IndTrain[, x]
+  test <- (-train)
+  
+  # Optimización de hiperparámetros usando solo los datos de entrenamiento
+  set.seed(123)
+  TuneRFt <- tune.randomForest(diabetes ~ ., data = Data[train, ], importance = FALSE, mtry = mallamtry, ntree = 200, nodesize = 1, tunecontrol = tune.control(sampling = "cross", cross = 5))
+  
+  # Entrenamiento del modelo final con el mtry óptimo encontrado en este ciclo
+  RFt <- randomForest(diabetes ~ ., data = Data[train, ], mtry = TuneRFt$best.parameters$mtry, importance = FALSE, ntree = 200, nodesize = 1)
+  
+  # Predicción de las clasificaciones sobre las observaciones de prueba
+  predRF <- predict(RFt, newdata = Data[test, ], type = "class")
+  
+  # Evaluación de las métricas de desempeño
+  tasas.c <- metrics_summary(obs = Data[test, "diabetes"], pred = predRF, metrics_list = c("accuracy", "recall", "specificity"), type = 'classification')
+  
+  return(tasas.c[, 2])
+}
+
+# Ejecución iterativa utilizando la partición estratificada global
+set.seed(123)
+TCC.B.RF <- sapply(1:B, RFMPP, IndTrain = particion, Data = PimaIndiansDiabetes2)
+
+# Promedio de las métricas de evaluación del modelo
+(TCC.RF <- rowMeans(TCC.B.RF))
+```
+
+Para cumplir con nuestro objetivo de predecir la presencia de diabetes en nuevas pacientes a partir de sus ocho variables clínicas, implementamos y contrastamos un total de nueve algoritmos predictivos. Nuestro portafolio de modelos abarcó desde métodos lineales y estadísticos clásicos (Regresión Logística con efectos principales e interacciones, Análisis Discriminante Lineal y Cuadrático), técnicas de regularización para selección de variables (Lasso con diferentes funciones de enlace), hasta algoritmos de clasificación probabilística (Naive Bayes), basados en distancias (K-NN optimizado) y métodos de ensamble (Random Forest con 200 árboles y búsqueda en malla para mtry).
+
+Para garantizar la robustez metodológica y determinar el verdadero poder predictivo de los algoritmos frente a datos no vistos, utilizamos el método de validación cruzada Repeated Holdout ($B=50$), dividiendo aleatoriamente la muestra en 80% para entrenamiento y 20% para prueba en cada iteración. Los resultados promedio se consolidan en la Tabla 1.
+
+```{r tabla-resultados, echo=FALSE, fig.align="center", fig.pos="H", message=FALSE, warning=FALSE}
+# Construcción del dataframe consolidado con los resultados promedio de las 50 iteraciones
+df <- data.frame(
+  Modelo = c(
+    'Regresión Logística (Interacciones)',
+    'Regresión Logística (Efectos Principales)',
+    'Lasso (Liga Logit)',
+    'Lasso (Liga Log)',
+    'Naive Bayes',
+    'LDA (Discriminante Lineal)',
+    'QDA (Discriminante Cuadrático)',
+    'K-NN (Vecinos Más Cercanos)',
+    'Random Forest'
+  ),
+  Exactitud_Global = c(TCC.mod1[1], TCC.mod2[1], TCC.mod3[1], TCC.mod4[1], TCC.modn[1], TCC.RHM.mod5[1], TCC.RHM.mod6QDA[1], TCC.modk[1], TCC.RF[1]),
+  Sensibilidad_Positivos = c(TCC.mod1[2], TCC.mod2[2], TCC.mod3[2], TCC.mod4[2], TCC.modn[2], TCC.RHM.mod5[2], TCC.RHM.mod6QDA[2], TCC.modk[2], TCC.RF[2]),
+  Especificidad_Negativos = c(TCC.mod1[3], TCC.mod2[3], TCC.mod3[3], TCC.mod4[3], TCC.modn[3], TCC.RHM.mod5[3], TCC.RHM.mod6QDA[3], TCC.modk[3], TCC.RF[3])
+)
+
+# Ordenamos la tabla de mayor a menor exactitud para que el mejor modelo quede hasta arriba
+df_ordenado <- df %>% arrange(desc(Exactitud_Global))
+
+# Generación de la tabla final con formato profesional
+df_ordenado %>% 
+  kbl(booktabs = TRUE, align = "lccc", 
+      col.names = c("Algoritmo Predictivo", "Exactitud Global", "Sensibilidad (Detectar Diabéticos)", "Especificidad (Descartar Sanos)"),
+      caption = "Comparativa de desempeño predictivo de los algoritmos evaluados (Validación Cruzada 50 iteraciones).") %>%
+  kable_styling(latex_options = c("striped", "hold_position", "scale_down")) %>%
+  # El profe tenía razón: solo resaltamos la fila más importante (la ganadora) en color de éxito (verde)
+  row_spec(1, bold = TRUE, background = "#D3E4CD", color = "black")
+```
+Al analizar las métricas de la tabla, destaca un fenómeno consistente en todos los algoritmos: existe una asimetría notable en el poder predictivo dependiendo del grupo a clasificar. Todos los modelos son altamente eficientes para identificar a las pacientes sanas (Grupo II), logrando tasas de Especificidad superiores al 82%, llegando incluso al 95% con Lasso-Log.
+
+Sin embargo, el poder predictivo cae drásticamente (rondando el 55%) cuando intentan detectar a las pacientes que efectivamente tienen diabetes (Grupo I o Sensibilidad). Esto indica que, aunque las tasas de Exactitud Global parecen favorables y estables (todas por encima del 73%), los algoritmos tienden a sesgarse hacia predecir el estado "sano", dificultando la detección de la enfermedad.
+
+Considerando el contexto estrictamente clínico de este análisis, el modelo elegido para implementación es el Clasificador Naive Bayes.
+
+Si bien el Análisis Discriminante Lineal (LDA) y la Regresión Logística de Efectos Principales obtuvieron una Exactitud Global ligeramente superior (77.29% y 77.21% respectivamente), la selección técnica en medicina no debe basarse únicamente en el acierto general. El modelo Naive Bayes es el algoritmo que logró la mayor Sensibilidad de toda la prueba (61.50%) para detectar correctamente a las pacientes diabéticas.
+
+En un escenario de salud preventiva, el costo de un Falso Negativo (diagnosticar como sana a una mujer que en realidad tiene diabetes, perdiendo tiempo valioso para iniciar su tratamiento) es infinitamente mayor al costo de un Falso Positivo (indicar un posible riesgo a una mujer sana, lo cual solo resultaría en un examen de laboratorio confirmatorio). Por lo tanto, el Clasificador Naive Bayes representa la decisión de negocio y médica más ética y funcional al minimizar la tasa de pacientes enfermas que pasan desapercibidas.
+
+## Oportunidades de Mejora
+
+Durante el desarrollo de este análisis, el uso inicial del Análisis de Componentes Principales (PCA) fue fundamental para confirmar de manera exploratoria y matemática que la base de datos contenía una fuerte señal de separabilidad, capturada casi en su totalidad por el Primer Componente (PC1). No obstante, al momento de estructurar los modelos predictivos finales, se tomó la decisión analítica de prescindir de estos componentes abstractos y entrenar los algoritmos exclusivamente con las variables originales. Esta decisión responde a una necesidad crítica del sector salud: la interpretabilidad. Un diagnóstico basado directamente en "niveles elevados de glucosa e insulina" es inmediatamente accionable y comprensible para un especialista médico, mientras que un modelo basado en una variable abstracta como el "PC1" representa una caja negra que carece de utilidad práctica en un consultorio.
+
+Sin embargo, el desarrollo de modelos de Machine Learning es un proceso iterativo. Para futuras versiones de este sistema predictivo, el desempeño general —y en particular sobre la clase positiva— podría optimizarse implementando las siguientes estrategias:
+
+* Ingeniería de Características Híbrida: Integrar formalmente el Primer Componente Principal (PC1) no como un reemplazo, sino como una variable predictora adicional dentro de los modelos logísticos, buscando capturar variaciones conjuntas sin sacrificar la trazabilidad de los indicadores médicos base.
+
+* Optimización Exhaustiva de Hiperparámetros: Ampliar los recursos computacionales para explorar mallas de búsqueda más extensas y precisas al evaluar el parámetro lambda en los métodos Lasso, así como evaluar variaciones más profundas en la arquitectura del Random Forest (modificando la profundidad máxima o el tamaño del nodo final).
+
+* Manejo de Desbalanceo de Clases: Dado que los modelos mostraron una tendencia natural a priorizar a la clase mayoritaria (pacientes sanas), resultaría prudente aplicar técnicas de sobremuestreo sintético (como SMOTE) en la matriz de entrenamiento. Esto forzaría a los algoritmos a penalizar más severamente los errores cometidos sobre el grupo de pacientes diabéticas.
+
+## Conclusión 
+
+La detección temprana de enfermedades a través de datos requiere un delicado equilibrio entre la precisión algorítmica y la aplicabilidad operativa. Mediante la recuperación de información con imputación múltiple (MICE) y la evaluación exhaustiva de nueve algoritmos predictivos, este proyecto demuestra que es posible estructurar herramientas de soporte clínico robustas a partir de indicadores básicos.
+
+La elección definitiva del clasificador Naive Bayes refleja el principio fundamental de la analítica aplicada a la medicina: el valor de un modelo no reside únicamente en su exactitud matemática, sino en su impacto humano. Al priorizar la sensibilidad diagnóstica, garantizamos que el sistema minimice los falsos negativos, transformando el análisis de datos en una barrera de prevención real y efectiva para la salud de las pacientes.
